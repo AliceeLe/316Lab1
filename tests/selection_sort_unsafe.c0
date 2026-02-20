@@ -1,0 +1,48 @@
+// Expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc >= 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == argc;
+{
+    int out_len = argc;
+    int[] out = alloc_array(int, out_len);
+
+    int i = 0;
+    while (i < out_len)
+    //@loop_invariant 0 <= i && i <= out_len;
+    //@loop_invariant \length(in) == argc && argc >= 0;
+    //@loop_invariant \length(out) == out_len;
+    //@loop_invariant out_len == argc;
+    {
+        out[i] = in[i];
+        i = i + 1;
+    }
+
+    i = 0;
+    while (i < out_len)
+    //@loop_invariant 0 <= i && i <= out_len;
+    //@loop_invariant \length(out) == out_len;
+    //@loop_invariant out_len == argc;
+    {
+        int min_idx = i;
+        int j = i + 1;
+        while (j <= out_len) // BUG: inclusive bound reads one past the end
+        //@loop_invariant i < j && j <= out_len;
+        //@loop_invariant i <= min_idx && min_idx < j;
+        //@loop_invariant \length(out) == out_len;
+        {
+            if (out[j] < out[min_idx]) {
+                min_idx = j;
+            }
+            j = j + 1;
+        }
+
+        int tmp = out[i];
+        out[i] = out[min_idx];
+        out[min_idx] = tmp;
+
+        i = i + 1;
+    }
+
+    return out;
+}

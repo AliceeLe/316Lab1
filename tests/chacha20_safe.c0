@@ -1,0 +1,158 @@
+// Expect: valid
+// ChaCha20 quarter-round (ARX) over 4x32-bit words.
+// No bitwise ops: XOR is simulated via a 16x16 nibble table; rotations via arithmetic.
+int[] main(int argc, int[] in)
+//@requires argc == 16;
+//@requires \length(in) == argc;
+//@requires \forall int i. 0 <= i && i < argc => (0 <= in[i] && in[i] < 256);
+//@ensures \length(\result) == 16;
+{
+    // xor4[a*16+b] = a XOR b for 0<=a,b<16
+    int[] xor4 = alloc_array(int, 256);
+    int a4 = 0;
+    while (a4 < 16)
+    //@loop_invariant 0 <= a4 && a4 <= 16;
+    //@loop_invariant \length(xor4) == 256;
+    //@loop_invariant argc == 16;
+    //@loop_invariant \length(in) == argc;
+    {
+        int b4 = 0;
+        while (b4 < 16)
+        //@loop_invariant 0 <= b4 && b4 <= 16;
+        //@loop_invariant 0 <= a4 && a4 < 16;
+        //@loop_invariant \length(xor4) == 256;
+        {
+            int x = a4;
+            int y = b4;
+            int b0 = (x % 2 + y % 2) % 2;
+            x = x / 2; y = y / 2;
+            int b1 = (x % 2 + y % 2) % 2;
+            x = x / 2; y = y / 2;
+            int b2 = (x % 2 + y % 2) % 2;
+            x = x / 2; y = y / 2;
+            int b3 = (x % 2 + y % 2) % 2;
+            xor4[a4 * 16 + b4] = b0 + 2 * b1 + 4 * b2 + 8 * b3;
+            b4 = b4 + 1;
+        }
+        a4 = a4 + 1;
+    }
+
+    // Parse 4 little-endian 32-bit words from bytes.
+    int a = in[0] + 256 * in[1] + 65536 * in[2] + 16777216 * in[3];
+    int b = in[4] + 256 * in[5] + 65536 * in[6] + 16777216 * in[7];
+    int c = in[8] + 256 * in[9] + 65536 * in[10] + 16777216 * in[11];
+    int d = in[12] + 256 * in[13] + 65536 * in[14] + 16777216 * in[15];
+    a = a % 4294967296;
+    b = b % 4294967296;
+    c = c % 4294967296;
+    d = d % 4294967296;
+
+    // Scratch for XOR-by-nibbles (32-bit).
+    int nib = 0;
+    int pow = 0;
+    int xa = 0;
+    int xb = 0;
+    int xr = 0;
+
+    // ChaCha20 quarter-round:
+    // a += b; d ^= a; d <<< 16;
+    // c += d; b ^= c; b <<< 12;
+    // a += b; d ^= a; d <<< 8;
+    // c += d; b ^= c; b <<< 7;
+
+    a = (a + b) % 4294967296;
+
+    nib = 0; pow = 1; xa = d; xb = a; xr = 0;
+    while (nib < 8)
+    //@loop_invariant 0 <= nib && nib <= 8;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        int na = xa % 16; if (na < 0) na = na + 16;
+        int nb = xb % 16; if (nb < 0) nb = nb + 16;
+        xr = xr + xor4[na * 16 + nb] * pow;
+        xa = xa / 16;
+        xb = xb / 16;
+        pow = pow * 16;
+        nib = nib + 1;
+    }
+    d = xr % 4294967296;
+    d = ((d * 65536) % 4294967296) + (d / 65536); // rotl32(d, 16)
+    d = d % 4294967296;
+
+    c = (c + d) % 4294967296;
+
+    nib = 0; pow = 1; xa = b; xb = c; xr = 0;
+    while (nib < 8)
+    //@loop_invariant 0 <= nib && nib <= 8;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        int na = xa % 16; if (na < 0) na = na + 16;
+        int nb = xb % 16; if (nb < 0) nb = nb + 16;
+        xr = xr + xor4[na * 16 + nb] * pow;
+        xa = xa / 16;
+        xb = xb / 16;
+        pow = pow * 16;
+        nib = nib + 1;
+    }
+    b = xr % 4294967296;
+    b = ((b * 4096) % 4294967296) + (b / 1048576); // rotl32(b, 12)
+    b = b % 4294967296;
+
+    a = (a + b) % 4294967296;
+
+    nib = 0; pow = 1; xa = d; xb = a; xr = 0;
+    while (nib < 8)
+    //@loop_invariant 0 <= nib && nib <= 8;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        int na = xa % 16; if (na < 0) na = na + 16;
+        int nb = xb % 16; if (nb < 0) nb = nb + 16;
+        xr = xr + xor4[na * 16 + nb] * pow;
+        xa = xa / 16;
+        xb = xb / 16;
+        pow = pow * 16;
+        nib = nib + 1;
+    }
+    d = xr % 4294967296;
+    d = ((d * 256) % 4294967296) + (d / 16777216); // rotl32(d, 8)
+    d = d % 4294967296;
+
+    c = (c + d) % 4294967296;
+
+    nib = 0; pow = 1; xa = b; xb = c; xr = 0;
+    while (nib < 8)
+    //@loop_invariant 0 <= nib && nib <= 8;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        int na = xa % 16; if (na < 0) na = na + 16;
+        int nb = xb % 16; if (nb < 0) nb = nb + 16;
+        xr = xr + xor4[na * 16 + nb] * pow;
+        xa = xa / 16;
+        xb = xb / 16;
+        pow = pow * 16;
+        nib = nib + 1;
+    }
+    b = xr % 4294967296;
+    b = ((b * 128) % 4294967296) + (b / 33554432); // rotl32(b, 7)
+    b = b % 4294967296;
+
+    // Output 16 bytes little-endian.
+    int[] out = alloc_array(int, 16);
+    out[0] = a % 256;
+    out[1] = (a / 256) % 256;
+    out[2] = (a / 65536) % 256;
+    out[3] = (a / 16777216) % 256;
+    out[4] = b % 256;
+    out[5] = (b / 256) % 256;
+    out[6] = (b / 65536) % 256;
+    out[7] = (b / 16777216) % 256;
+    out[8] = c % 256;
+    out[9] = (c / 256) % 256;
+    out[10] = (c / 65536) % 256;
+    out[11] = (c / 16777216) % 256;
+    out[12] = d % 256;
+    out[13] = (d / 256) % 256;
+    out[14] = (d / 65536) % 256;
+    out[15] = (d / 16777216) % 256;
+    return out;
+}

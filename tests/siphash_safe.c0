@@ -1,0 +1,137 @@
+// Expect: valid
+// Small SipHash-style mixer over one 8-byte block.
+// No bitwise ops: XOR is simulated via a 16x16 nibble table.
+int[] main(int argc, int[] in)
+//@requires argc == 8;
+//@requires \length(in) == argc;
+//@requires \forall int i. 0 <= i && i < argc => (0 <= in[i] && in[i] < 256);
+//@ensures \length(\result) == 8;
+{
+    // xor4[a*16+b] = a XOR b for 0<=a,b<16
+    int[] xor4 = alloc_array(int, 256);
+    int a4 = 0;
+    while (a4 < 16)
+    //@loop_invariant 0 <= a4 && a4 <= 16;
+    //@loop_invariant \length(xor4) == 256;
+    //@loop_invariant argc == 8;
+    //@loop_invariant \length(in) == argc;
+    {
+        int b4 = 0;
+        while (b4 < 16)
+        //@loop_invariant 0 <= b4 && b4 <= 16;
+        //@loop_invariant 0 <= a4 && a4 < 16;
+        //@loop_invariant \length(xor4) == 256;
+        {
+            int x = a4;
+            int y = b4;
+            int b0 = (x % 2 + y % 2) % 2;
+            x = x / 2; y = y / 2;
+            int b1 = (x % 2 + y % 2) % 2;
+            x = x / 2; y = y / 2;
+            int b2 = (x % 2 + y % 2) % 2;
+            x = x / 2; y = y / 2;
+            int b3 = (x % 2 + y % 2) % 2;
+            xor4[a4 * 16 + b4] = b0 + 2 * b1 + 4 * b2 + 8 * b3;
+            b4 = b4 + 1;
+        }
+        a4 = a4 + 1;
+    }
+
+    // Parse 8-byte message as a 64-bit value split into 32-bit halves
+    int m_lo = in[0] + 256 * in[1] + 65536 * in[2] + 16777216 * in[3];
+    int m_hi = in[4] + 256 * in[5] + 65536 * in[6] + 16777216 * in[7];
+    m_lo = m_lo % 4294967296;
+    m_hi = m_hi % 4294967296;
+
+    // Initial state (SipHash IV XOR key), split into 32-bit halves:
+    // v0 = 0x736f6d6570736575 ^ 0x0706050403020100
+    // v1 = 0x646f72616e646f6d ^ 0x0f0e0d0c0b0a0908
+    int v0_lo = 1936811125;
+    int v0_hi = 1953065057;
+    int v1_lo = 1701733989;
+    int v1_hi = 1801551725;
+
+    // Absorb message with addition (still keeps us in 64-bit-style arithmetic).
+    int sum_lo = v0_lo + m_lo;
+    int carry = sum_lo / 4294967296;
+    v0_lo = sum_lo % 4294967296;
+    v0_hi = (v0_hi + m_hi + carry) % 4294967296;
+
+    // Scratch for XOR-by-nibbles (32-bit).
+    int nib = 0;
+    int pow = 0;
+    int xa = 0;
+    int xb = 0;
+    int xr = 0;
+
+    // Mix: v0 += v1
+    sum_lo = v0_lo + v1_lo;
+    carry = sum_lo / 4294967296;
+    v0_lo = sum_lo % 4294967296;
+    v0_hi = (v0_hi + v1_hi + carry) % 4294967296;
+
+    // Mix: v1 = rotl(v1, 13)
+    int v1_lo_new = ((v1_lo * 8192) % 4294967296) + (v1_hi / 524288);
+    int v1_hi_new = ((v1_hi * 8192) % 4294967296) + (v1_lo / 524288);
+    v1_lo = v1_lo_new % 4294967296;
+    v1_hi = v1_hi_new % 4294967296;
+
+    // Mix: v1 ^= v0
+    nib = 0; pow = 1; xa = v1_lo; xb = v0_lo; xr = 0;
+    while (nib < 8)
+    //@loop_invariant 0 <= nib && nib <= 8;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        int na = xa % 16; if (na < 0) na = na + 16;
+        int nb = xb % 16; if (nb < 0) nb = nb + 16;
+        xr = xr + xor4[na * 16 + nb] * pow;
+        xa = xa / 16;
+        xb = xb / 16;
+        pow = pow * 16;
+        nib = nib + 1;
+    }
+    v1_lo = xr % 4294967296;
+
+    nib = 0; pow = 1; xa = v1_hi; xb = v0_hi; xr = 0;
+    while (nib < 8)
+    //@loop_invariant 0 <= nib && nib <= 8;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        int na = xa % 16; if (na < 0) na = na + 16;
+        int nb = xb % 16; if (nb < 0) nb = nb + 16;
+        xr = xr + xor4[na * 16 + nb] * pow;
+        xa = xa / 16;
+        xb = xb / 16;
+        pow = pow * 16;
+        nib = nib + 1;
+    }
+    v1_hi = xr % 4294967296;
+
+    // Mix: v0 = rotl(v0, 32) => swap halves
+    int tmp32 = v0_lo;
+    v0_lo = v0_hi;
+    v0_hi = tmp32;
+
+    sum_lo = v0_lo + m_lo;
+    carry = sum_lo / 4294967296;
+    v0_lo = sum_lo % 4294967296;
+    v0_hi = (v0_hi + m_hi + carry) % 4294967296;
+
+    // Final combine 
+    int tag_lo = v0_lo + v1_lo;
+    carry = tag_lo / 4294967296;
+    tag_lo = tag_lo % 4294967296;
+    int tag_hi = (v0_hi + v1_hi + carry) % 4294967296;
+
+    // Output 8 bytes little-endian.
+    int[] out = alloc_array(int, 8);
+    out[0] = tag_lo % 256;
+    out[1] = (tag_lo / 256) % 256;
+    out[2] = (tag_lo / 65536) % 256;
+    out[3] = (tag_lo / 16777216) % 256;
+    out[4] = tag_hi % 256;
+    out[5] = (tag_hi / 256) % 256;
+    out[6] = (tag_hi / 65536) % 256;
+    out[7] = (tag_hi / 16777216) % 256;
+    return out;
+}

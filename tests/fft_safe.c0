@@ -1,0 +1,158 @@
+// Expect: valid
+// 8-point radix-2 decimation-in-frequency FFT-like transform over fixed-point complex ints.
+// Goal is memory safety only (not correctness/performance).
+int[] main(int argc, int[] in)
+//@requires argc == 16;
+//@requires \length(in) == argc;
+//@requires \forall int i. 0 <= i && i < argc => (0 <= in[i] && in[i] < 256);
+//@ensures \length(\result) == 16;
+{
+    int[] re = alloc_array(int, 8);
+    int[] im = alloc_array(int, 8);
+
+    // Parse 8 little-endian 16-bit samples into real part; imag = 0.
+    re[0] = (in[0] + 256 * in[1]) % 65536; im[0] = 0;
+    re[1] = (in[2] + 256 * in[3]) % 65536; im[1] = 0;
+    re[2] = (in[4] + 256 * in[5]) % 65536; im[2] = 0;
+    re[3] = (in[6] + 256 * in[7]) % 65536; im[3] = 0;
+    re[4] = (in[8] + 256 * in[9]) % 65536; im[4] = 0;
+    re[5] = (in[10] + 256 * in[11]) % 65536; im[5] = 0;
+    re[6] = (in[12] + 256 * in[13]) % 65536; im[6] = 0;
+    re[7] = (in[14] + 256 * in[15]) % 65536; im[7] = 0;
+
+    // Twiddle factors W8^k = exp(-2*pi*i*k/8), scaled by SCALE.
+    int[] wr = alloc_array(int, 8);
+    int[] wi = alloc_array(int, 8);
+    wr[0] = 1024; wi[0] = 0;
+    wr[1] = 724;  wi[1] = -724;
+    wr[2] = 0;    wi[2] = -1024;
+    wr[3] = -724; wi[3] = -724;
+    wr[4] = -1024; wi[4] = 0;
+    wr[5] = -724;  wi[5] = 724;
+    wr[6] = 0;     wi[6] = 1024;
+    wr[7] = 724;   wi[7] = 724;
+
+    // Stage 1
+    int j = 0;
+    while (j < 4)
+    //@loop_invariant 0 <= j && j <= 4;
+    //@loop_invariant \length(re) == 8;
+    //@loop_invariant \length(im) == 8;
+    //@loop_invariant \length(wr) == 8;
+    //@loop_invariant \length(wi) == 8;
+    {
+        int idx1 = j;
+        int idx2 = j + 4;
+
+        int ur = re[idx1];
+        int ui = im[idx1];
+        int vr = re[idx2];
+        int vi = im[idx2];
+
+        int tr = ur - vr;
+        int ti = ui - vi;
+
+        re[idx1] = ur + vr;
+        im[idx1] = ui + vi;
+
+        int tw = j; // 0..3
+        int pr = (tr * wr[tw] - ti * wi[tw]) / 1024;
+        int pi = (tr * wi[tw] + ti * wr[tw]) / 1024;
+        re[idx2] = pr;
+        im[idx2] = pi;
+
+        j = j + 1;
+    }
+
+    // Stage 2
+    int base = 0;
+    while (base < 8)
+    //@loop_invariant (base == 0) || (base == 4) || (base == 8);
+    //@loop_invariant 0 <= base && base <= 8;
+    //@loop_invariant \length(re) == 8;
+    //@loop_invariant \length(im) == 8;
+    //@loop_invariant \length(wr) == 8;
+    //@loop_invariant \length(wi) == 8;
+    {
+        j = 0;
+        while (j < 2)
+        //@loop_invariant 0 <= j && j <= 2;
+        //@loop_invariant (base == 0) || (base == 4);
+        //@loop_invariant \length(re) == 8;
+        //@loop_invariant \length(im) == 8;
+        //@loop_invariant \length(wr) == 8;
+        //@loop_invariant \length(wi) == 8;
+        {
+            int idx1 = base + j;
+            int idx2 = base + j + 2;
+
+            int ur = re[idx1];
+            int ui = im[idx1];
+            int vr = re[idx2];
+            int vi = im[idx2];
+
+            int tr = ur - vr;
+            int ti = ui - vi;
+
+            re[idx1] = ur + vr;
+            im[idx1] = ui + vi;
+
+            int tw = 2 * j; // 0 or 2
+            int pr = (tr * wr[tw] - ti * wi[tw]) / 1024;
+            int pi = (tr * wi[tw] + ti * wr[tw]) / 1024;
+            re[idx2] = pr;
+            im[idx2] = pi;
+
+            j = j + 1;
+        }
+        base = base + 4;
+    }
+
+    // Stage 3
+    base = 0;
+    while (base < 8)
+    //@loop_invariant 0 <= base && base <= 8;
+    //@loop_invariant (base % 2) == 0;
+    //@loop_invariant \length(re) == 8;
+    //@loop_invariant \length(im) == 8;
+    {
+        int idx1 = base;
+        int idx2 = base + 1;
+
+        int ur = re[idx1];
+        int ui = im[idx1];
+        int vr = re[idx2];
+        int vi = im[idx2];
+
+        int tr = ur - vr;
+        int ti = ui - vi;
+
+        re[idx1] = ur + vr;
+        im[idx1] = ui + vi;
+        re[idx2] = tr;
+        im[idx2] = ti;
+
+        base = base + 2;
+    }
+
+    // Output 8 little-endian 16-bit real components.
+    int[] out = alloc_array(int, 16);
+    int v0 = re[0] % 65536; if (v0 < 0) v0 = v0 + 65536;
+    int v1 = re[1] % 65536; if (v1 < 0) v1 = v1 + 65536;
+    int v2 = re[2] % 65536; if (v2 < 0) v2 = v2 + 65536;
+    int v3 = re[3] % 65536; if (v3 < 0) v3 = v3 + 65536;
+    int v4 = re[4] % 65536; if (v4 < 0) v4 = v4 + 65536;
+    int v5 = re[5] % 65536; if (v5 < 0) v5 = v5 + 65536;
+    int v6 = re[6] % 65536; if (v6 < 0) v6 = v6 + 65536;
+    int v7 = re[7] % 65536; if (v7 < 0) v7 = v7 + 65536;
+
+    out[0] = v0 % 256; out[1] = (v0 / 256) % 256;
+    out[2] = v1 % 256; out[3] = (v1 / 256) % 256;
+    out[4] = v2 % 256; out[5] = (v2 / 256) % 256;
+    out[6] = v3 % 256; out[7] = (v3 / 256) % 256;
+    out[8] = v4 % 256; out[9] = (v4 / 256) % 256;
+    out[10] = v5 % 256; out[11] = (v5 / 256) % 256;
+    out[12] = v6 % 256; out[13] = (v6 / 256) % 256;
+    out[14] = v7 % 256; out[15] = (v7 / 256) % 256;
+    return out;
+}

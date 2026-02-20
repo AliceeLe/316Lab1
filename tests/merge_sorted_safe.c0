@@ -1,0 +1,37 @@
+// Expect: valid
+int[] main(int argc, int[] in)
+//@requires argc >= 0;
+//@requires argc % 4 == 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == 2 * (argc / 4);
+{
+    int n = argc / 4;
+    int out_len = 2 * n;
+    int[] out = alloc_array(int, out_len);
+
+    int i = 0;
+    int j = 0;
+    int k = 0;
+
+    while (k < 2 * n)
+    //@loop_invariant 0 <= i && i <= n;
+    //@loop_invariant 0 <= j && j <= n;
+    //@loop_invariant 0 <= k && k <= 2 * n;
+    //@loop_invariant k == i + j;
+    //@loop_invariant \length(in) == argc && argc >= 0 && argc % 4 == 0;
+    //@loop_invariant \length(out) == out_len;
+    //@loop_invariant 0 <= n && n == argc / 4;
+    //@loop_invariant out_len == 2 * n;
+    {
+        if (i < n && (j >= n || in[i] <= in[n + j])) {
+            out[k] = in[i];
+            i = i + 1;
+        } else {
+            out[k] = in[n + j];
+            j = j + 1;
+        }
+        k = k + 1;
+    }
+
+    return out;
+}

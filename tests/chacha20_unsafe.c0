@@ -1,0 +1,154 @@
+// Expect: unsafe
+// ChaCha20 quarter-round, but with an out-of-bounds write in the output.
+int[] main(int argc, int[] in)
+//@requires argc == 16;
+//@requires \length(in) == argc;
+//@requires \forall int i. 0 <= i && i < argc => (0 <= in[i] && in[i] < 256);
+//@ensures \length(\result) == 16;
+{
+    // xor4[a*16+b] = a XOR b for 0<=a,b<16
+    int[] xor4 = alloc_array(int, 256);
+    int a4 = 0;
+    while (a4 < 16)
+    //@loop_invariant 0 <= a4 && a4 <= 16;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        int b4 = 0;
+        while (b4 < 16)
+        //@loop_invariant 0 <= b4 && b4 <= 16;
+        //@loop_invariant 0 <= a4 && a4 < 16;
+        //@loop_invariant \length(xor4) == 256;
+        {
+            int x = a4;
+            int y = b4;
+            int b0 = (x % 2 + y % 2) % 2;
+            x = x / 2; y = y / 2;
+            int b1 = (x % 2 + y % 2) % 2;
+            x = x / 2; y = y / 2;
+            int b2 = (x % 2 + y % 2) % 2;
+            x = x / 2; y = y / 2;
+            int b3 = (x % 2 + y % 2) % 2;
+            xor4[a4 * 16 + b4] = b0 + 2 * b1 + 4 * b2 + 8 * b3;
+            b4 = b4 + 1;
+        }
+        a4 = a4 + 1;
+    }
+
+    // Parse 4 little-endian 32-bit words from bytes.
+    int a = in[0] + 256 * in[1] + 65536 * in[2] + 16777216 * in[3];
+    int b = in[4] + 256 * in[5] + 65536 * in[6] + 16777216 * in[7];
+    int c = in[8] + 256 * in[9] + 65536 * in[10] + 16777216 * in[11];
+    int d = in[12] + 256 * in[13] + 65536 * in[14] + 16777216 * in[15];
+    a = a % 4294967296;
+    b = b % 4294967296;
+    c = c % 4294967296;
+    d = d % 4294967296;
+
+    // Scratch for XOR-by-nibbles (32-bit).
+    int nib = 0;
+    int pow = 0;
+    int xa = 0;
+    int xb = 0;
+    int xr = 0;
+
+    // a += b; d ^= a; d <<< 16;
+    a = (a + b) % 4294967296;
+    nib = 0; pow = 1; xa = d; xb = a; xr = 0;
+    while (nib < 8)
+    //@loop_invariant 0 <= nib && nib <= 8;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        int na = xa % 16; if (na < 0) na = na + 16;
+        int nb = xb % 16; if (nb < 0) nb = nb + 16;
+        xr = xr + xor4[na * 16 + nb] * pow;
+        xa = xa / 16;
+        xb = xb / 16;
+        pow = pow * 16;
+        nib = nib + 1;
+    }
+    d = xr % 4294967296;
+    d = ((d * 65536) % 4294967296) + (d / 65536);
+    d = d % 4294967296;
+
+    // c += d; b ^= c; b <<< 12;
+    c = (c + d) % 4294967296;
+    nib = 0; pow = 1; xa = b; xb = c; xr = 0;
+    while (nib < 8)
+    //@loop_invariant 0 <= nib && nib <= 8;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        int na = xa % 16; if (na < 0) na = na + 16;
+        int nb = xb % 16; if (nb < 0) nb = nb + 16;
+        xr = xr + xor4[na * 16 + nb] * pow;
+        xa = xa / 16;
+        xb = xb / 16;
+        pow = pow * 16;
+        nib = nib + 1;
+    }
+    b = xr % 4294967296;
+    b = ((b * 4096) % 4294967296) + (b / 1048576);
+    b = b % 4294967296;
+
+    // a += b; d ^= a; d <<< 8;
+    a = (a + b) % 4294967296;
+    nib = 0; pow = 1; xa = d; xb = a; xr = 0;
+    while (nib < 8)
+    //@loop_invariant 0 <= nib && nib <= 8;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        // BUG: the assignments below could be negative
+        int na = xa % 16;
+        int nb = xb % 16;
+        xr = xr + xor4[na * 16 + nb] * pow;
+        xa = xa / 16;
+        xb = xb / 16;
+        pow = pow * 16;
+        nib = nib + 1;
+    }
+    d = xr % 4294967296;
+    d = ((d * 256) % 4294967296) + (d / 16777216);
+    d = d % 4294967296;
+
+    // c += d; b ^= c; b <<< 7;
+    c = (c + d) % 4294967296;
+    nib = 0; pow = 1; xa = b; xb = c; xr = 0;
+    while (nib < 8)
+    //@loop_invariant 0 <= nib && nib <= 8;
+    //@loop_invariant \length(xor4) == 256;
+    {
+        int na = xa % 16; if (na < 0) na = na + 16;
+        int nb = xb % 16; if (nb < 0) nb = nb + 16;
+        xr = xr + xor4[na * 16 + nb] * pow;
+        xa = xa / 16;
+        xb = xb / 16;
+        pow = pow * 16;
+        nib = nib + 1;
+    }
+    b = xr % 4294967296;
+    b = ((b * 128) % 4294967296) + (b / 33554432);
+    b = b % 4294967296;
+
+    // Output 16 bytes little-endian.
+    int[] words = alloc_array(int, 4);
+    words[0] = a;
+    words[1] = b;
+    words[2] = c;
+    words[3] = d;
+
+    int[] out = alloc_array(int, 16);
+    int w = 0;
+    while (w < 4)
+    //@loop_invariant 0 <= w && w <= 4;
+    //@loop_invariant \length(out) == 16;
+    //@loop_invariant \length(words) == 4;
+    {
+        int word = words[w];
+        int base = 4 * w;
+        out[base] = word % 256;
+        out[base + 1] = (word / 256) % 256;
+        out[base + 2] = (word / 65536) % 256;
+        out[base + 3] = (word / 16777216) % 256;
+        w = w + 1;
+    }
+    return out;
+}

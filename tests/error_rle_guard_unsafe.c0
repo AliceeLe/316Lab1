@@ -1,0 +1,38 @@
+// Expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc >= 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == argc;
+{
+    int[] out = alloc_array(int, argc);
+
+    if (argc == 0) {
+        error("empty input");
+    }
+
+    int n = in[0];
+
+    if (n < 0) {
+        error("negative length");
+    }
+
+    // BUG: should reject `n == argc`, but this condition allows it.
+    if (n > argc) {
+        error("length too large");
+    }
+
+    int i = 0;
+    while (i < n)
+    //@loop_invariant 0 <= i && i <= n;
+    //@loop_invariant 0 <= n && n <= argc;
+    //@loop_invariant \length(in) == argc;
+    //@loop_invariant \length(out) == argc;
+    {
+        // When n == argc, the access `in[i+1]` will go out of bounds on the last iteration.
+        out[i] = in[i + 1];
+        i = i + 1;
+    }
+
+    return out;
+}
+

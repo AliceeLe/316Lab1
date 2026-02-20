@@ -1,0 +1,39 @@
+// Expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc > 0;
+//@requires argc % 2 == 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == (argc / 2) + 1;
+{
+    int n = argc / 2;
+    int out_len = n + 1;
+    int[] out = alloc_array(int, out_len);
+
+    int pivot = in[0];
+    int left = 0;
+    int right = n; // BUG: off-by-one index for the right partition
+    int i = 0;
+
+    while (i < n)
+    //@loop_invariant 0 <= i && i <= n;
+    //@loop_invariant 0 <= left && left <= i;
+    //@loop_invariant right >= (n - 1) - i && right < n;
+    //@loop_invariant \length(in) == argc && argc > 0 && argc % 2 == 0;
+    //@loop_invariant \length(out) == out_len;
+    //@loop_invariant 0 <= n && n == argc / 2;
+    //@loop_invariant out_len == n + 1;
+    {
+        int x = in[i];
+        if (x <= pivot) {
+            out[1 + left] = x;
+            left = left + 1;
+        } else {
+            out[1 + right] = x;
+            right = right - 1;
+        }
+        i = i + 1;
+    }
+
+    out[0] = left;
+    return out;
+}

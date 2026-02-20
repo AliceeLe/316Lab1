@@ -1,0 +1,26 @@
+// Expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc >= 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == 1;
+{
+    int res = 1;
+    int i = 0;
+    int j = argc - 1;
+
+    while (i < j && res == 1)
+    //@loop_invariant 0 <= i && i <= argc;
+    //@loop_invariant -1 <= j && j < argc;
+    //@loop_invariant \length(in) == argc && argc >= 0;
+    {
+        if (in[i] != in[j + 1]) { // BUG: reads past end when j == argc - 1
+            res = 0;
+        }
+        i = i + 1;
+        j = j - 1;
+    }
+
+    int[] out = alloc_array(int, 1);
+    out[0] = res;
+    return out;
+}

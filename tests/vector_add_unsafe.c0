@@ -1,0 +1,26 @@
+// Expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc >= 3;
+//@requires argc % 3 == 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == argc / 3;
+{
+    int n = argc / 3;
+    int out_len = n;
+    int[] out = alloc_array(int, out_len);
+
+    int i = 0;
+    while (i <= n) // BUG: inclusive bound writes out[out_len]
+    //@loop_invariant 0 <= i && i <= n;
+    //@loop_invariant \length(in) == argc && argc >= 3 && argc % 3 == 0;
+    //@loop_invariant \length(out) == out_len;
+    //@loop_invariant 0 <= n && n == argc / 3;
+    //@loop_invariant out_len == n;
+    //@loop_invariant n + n <= argc;
+    {
+        out[i] = in[i] + in[n + i];
+        i = i + 1;
+    }
+
+    return out;
+}

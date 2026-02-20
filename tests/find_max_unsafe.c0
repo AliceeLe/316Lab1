@@ -1,0 +1,24 @@
+// Expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc > 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == 1;
+{
+    int max_idx = 0;
+    int i = 1;
+
+    while (i < argc)
+    //@loop_invariant 0 <= i && i <= argc;
+    //@loop_invariant 0 <= max_idx && max_idx < i;
+    //@loop_invariant \length(in) == argc && argc > 0;
+    {
+        if (in[i + 1] > in[max_idx]) { // BUG: reads past end when i == argc - 1
+            max_idx = i;
+        }
+        i = i + 1;
+    }
+
+    int[] out = alloc_array(int, 1);
+    out[0] = max_idx;
+    return out;
+}

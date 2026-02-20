@@ -1,0 +1,29 @@
+// Expect: valid
+int[] main(int argc, int[] in)
+//@requires argc >= 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == argc;
+{
+    int[] out = alloc_array(int, argc);
+
+    int i = 0;
+    int s = 0;
+
+    while (i < argc)
+    //@loop_invariant 0 <= i && i <= argc;
+    //@loop_invariant \length(in) == argc;
+    //@loop_invariant \length(out) == argc;
+    {
+        assert((i / 1) == i);
+        assert(in[i] == in[i]);
+
+        out[i] = s;
+        s = s + in[i];
+        i = i + 1;
+    }
+
+    // A final sanity check about the returned array length.
+    assert(\length(out) == argc);
+    return out;
+}
+

@@ -1,0 +1,27 @@
+// Expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc >= 0;
+//@requires argc % 2 == 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == argc / 2;
+{
+    int n = argc / 2;
+    int out_len = n;
+    int[] out = alloc_array(int, out_len);
+
+    int i = 0;
+    while (i < n)
+    //@loop_invariant 0 <= i && i <= n;
+    //@loop_invariant \length(in) == argc && argc >= 0 && argc % 2 == 0;
+    //@loop_invariant \length(out) == out_len;
+    //@loop_invariant 0 <= n && n == argc / 2;
+    //@loop_invariant out_len == n;
+    //@loop_invariant i < n => (0 <= (n - 1) - i && (n - 1) - i < n);
+    {
+        int val = in[(n - 1) - i];
+        out[i + 1] = val; // BUG: off-by-one write (forgot out is 0-indexed)
+        i = i + 1;
+    }
+
+    return out;
+}

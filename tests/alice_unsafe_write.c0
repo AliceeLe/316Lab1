@@ -1,0 +1,15 @@
+//expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc >= 1; 
+//@requires \length(in) == argc; 
+//@ensures \length(\result) == 1; 
+{
+    in[0] = 1; 
+    // We're sure length(in) is at least 1
+    // But we don't know if there are additional 
+    // spaces allocated
+    in[1] = 2; 
+    in[2] = 3; 
+
+    return in;
+}

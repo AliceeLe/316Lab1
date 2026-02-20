@@ -1,0 +1,33 @@
+// Expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc > 1;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == 1;
+{
+    int target = in[0];
+
+    int low = 1;
+    int high = argc - 1;
+    int mid = (high + low) / 2;
+
+    while (low < high && target != in[mid])
+    //@loop_invariant 1 <= low && high < argc;
+    //@loop_invariant \length(in) == argc && argc > 1;
+    //@loop_invariant 0 <= mid && mid < argc;
+    {
+        mid = (high + low) / 2; // BUG: may overflow
+        if (in[mid] < target) {
+            low = mid + 1;
+        } else if (in[mid] > target) {
+            high = mid;
+        }
+    }
+
+    if (low >= high || in[mid] != target) {
+        mid = -1;
+    }
+
+    int[] out = alloc_array(int, 1);
+    out[0] = mid;
+    return out;
+}

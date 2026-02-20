@@ -1,0 +1,20 @@
+// Expect: valid
+int[] main(int argc, int[] in)
+//@requires argc >= 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == 1;
+{
+    int sum = 0;
+    int i = 0;
+    while (i < argc)
+    //@loop_invariant 0 <= i && i <= argc;
+    //@loop_invariant \length(in) == argc && argc >= 0;
+    {
+        sum = sum + in[i];
+        i = i + 1;
+    }
+
+    int[] out = alloc_array(int, 1);
+    out[0] = sum;
+    return out;
+}

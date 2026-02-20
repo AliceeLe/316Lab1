@@ -1,0 +1,9 @@
+// expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc == 0;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == -2;
+{
+    int[] res = alloc_array(int, -2);
+    return res;
+}

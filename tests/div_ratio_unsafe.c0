@@ -1,0 +1,24 @@
+// Expect: unsafe
+int[] main(int argc, int[] in)
+//@requires argc >= 2;
+//@requires \length(in) == argc;
+//@ensures \length(\result) == 1;
+{
+    int prev = in[0];
+    int sum = 0;
+
+    int i = 1;
+    while (i < argc)
+    //@loop_invariant 1 <= i && i <= argc;
+    //@loop_invariant \length(in) == argc && argc >= 2;
+    {
+        int cur = in[i];
+        prev = cur;
+        sum = sum + (cur / prev); // BUG: uses updated prev instead of saving into denom and checking
+        i = i + 1;
+    }
+
+    int[] out = alloc_array(int, 1);
+    out[0] = sum;
+    return out;
+}
