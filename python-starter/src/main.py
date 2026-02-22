@@ -19,27 +19,27 @@ def print_and_exit(msg: str, code: int) -> None:
 def main() -> None:
     argv = sys.argv[1:]
     if len(argv) != 1:
-        print_and_exit("error", 1)
+        print_and_exit("error: no argument", 1)
     filename = argv[0]
     try:
         with open(filename, "r", encoding="utf-8") as f:
             src = f.read()
     except Exception:
-        print_and_exit("error", 1)
+        print_and_exit("error: unable to open file", 1)
 
     try:
         prog = file_parse(src)
     except Exception as e:
         _ = e
-        print_and_exit("error", 1)
+        print_and_exit("error: unable to parse file", 1)
 
     try:
         ok = check_safety(prog)
     except NotImplementedError:
-        print_and_exit("error", 1)
+        print_and_exit("error: not yet implemented", 1)
     except Exception as e:
         _ = e
-        print_and_exit("error", 1)
+        print_and_exit(e, 1)
 
     if ok:
         print_and_exit("valid", 0)
