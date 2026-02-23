@@ -39,7 +39,7 @@ def _neq(a: c0.Exp, b: c0.Exp) -> c0.Exp:
     return c0.BinOp("!=", a, b)
 
 
-# Division/modulo safety guard
+# Division/mod safety guard
 def divmod_guard(e: c0.Exp) -> c0.Exp:
     match e:
         case c0.BinOp(op, left, right):
@@ -187,7 +187,7 @@ def wlp(stmt: c0.Stmt, Q: c0.Exp, depth: int = 0) -> Tuple[c0.Exp, WhiteBox]:
             return _and(divmod_guard(cond), _and(cond, Q)), []
 
         case c0.Error(_):
-            # error() is always safe — continuation is irrelevant.
+            # error() is always safe so we can just terminate rn
             return _true(), []
 
         case c0.Return(_):
@@ -215,10 +215,10 @@ def wlp_while(
 ) -> Tuple[c0.Exp, WhiteBox]:
 
     if not invs:
-        # No invariant supplied — cannot verify. Conservatively unsafe.
+        #there's no invariant to check so unsafe
         return _false(), []
 
-    # Combine multiple invariants into one conjunction.
+    
     inv: c0.Exp = invs[0]
     for i in invs[1:]:
         inv = _and(inv, i)
@@ -226,32 +226,24 @@ def wlp_while(
 
     body_wlp, inner_wb = wlp(body, inv, depth + 1)
     modified = c0_util.get_defs(body)
-    scalar_modified = {
-        v for v in modified
-        if v in _var_types and not isinstance(_var_types[v], c0.ArrayType)
-    }
-    all_vars = (
+    avoid = (
         c0_util.vars_exp(inv)
         | c0_util.vars_exp(cond)
-        | c0_util.vars_exp(body_wlp)
+        | c0_util.vars_stmt(body)
         | c0_util.vars_exp(Q)
     )
-    avoid = all_vars | c0_util.vars_stmt(body)
-    scalar_vars = scalar_modified
     fresh_map: Dict[str, str] = {}
-    for var in sorted(scalar_vars):
+    for var in sorted(modified):
         fresh = c0_util.get_fresh_name(var + "_s", avoid)
         avoid.add(fresh)
         fresh_map[var] = fresh
 
-    # Register fresh var types so the solver encodes them correctly
     fresh_types: Dict[str, c0.Type] = {}
     for orig, fresh in fresh_map.items():
         if orig in _var_types:
             fresh_types[fresh] = _var_types[orig]
     _register_types(fresh_types)
 
-    # Substitute all vars to fresh states
     inv_sym = inv
     cond_sym = cond
     body_wlp_sym = body_wlp
@@ -273,7 +265,11 @@ def wlp_while(
         _and(inv_sym, _and(_not(cond_sym), cond_guard)), Q_sym
     )
 
-    fresh_vars = list(fresh_map.values())
+    # Only quantify over scalar fresh vars (Z3 ForAll handles BitVec, not array sorts)
+    fresh_vars = [
+        fresh for orig, fresh in fresh_map.items()
+        if orig in _var_types and not isinstance(_var_types[orig], c0.ArrayType)
+    ]
     if fresh_vars:
         preservation = c0.ForAll(fresh_vars, preservation_inner)
         exit_condition = c0.ForAll(fresh_vars, exit_inner)
