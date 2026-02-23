@@ -1,16 +1,3 @@
-"""WLP-based memory safety checker.
-
-Per the lecture notes (Lecture 7, Section 8), the WLP for a while loop
-produces three components:
-  1. Establishment  : J          (inline, checked with precondition)
-  2. □(J ∧ cond → wlp body J)   (white-box: checked standalone, universally)
-  3. □(J ∧ ¬cond → Q)           (white-box: checked standalone, universally)
-
-White-box formulas are "pulled out" and checked independently for validity.
-They are NOT folded into the main implication P → wlp α Q, because the □
-modality erases all context — they must be valid in every state.
-"""
-
 from __future__ import annotations
 
 from typing import List, Dict, Tuple
@@ -19,10 +6,7 @@ import c0
 import c0_util
 import solver
 
-# ---------------------------------------------------------------------------
 # Expression helpers
-# ---------------------------------------------------------------------------
-
 def _true() -> c0.Exp:  return c0.BoolConst(True)
 def _false() -> c0.Exp: return c0.BoolConst(False)
 
@@ -55,12 +39,8 @@ def _neq(a: c0.Exp, b: c0.Exp) -> c0.Exp:
     return c0.BinOp("!=", a, b)
 
 
-# ---------------------------------------------------------------------------
 # Division/modulo safety guard
-# ---------------------------------------------------------------------------
-
 def divmod_guard(e: c0.Exp) -> c0.Exp:
-    """Conjoin denominator != 0 for every / and % in e (and in all subexpressions)."""
     match e:
         case c0.BinOp(op, left, right):
             g = _and(divmod_guard(left), divmod_guard(right))
@@ -86,9 +66,31 @@ def divmod_guard(e: c0.Exp) -> c0.Exp:
             return _true()
 
 
-# ---------------------------------------------------------------------------
+def _normalize_length(e: c0.Exp) -> c0.Exp:
+    match e:
+        case c0.Length(c0.ArrSet(arr, _, _)):
+            return _normalize_length(c0.Length(arr))
+        case c0.Length(arg):
+            return c0.Length(_normalize_length(arg))
+        case c0.BinOp(op, l, r):
+            return c0.BinOp(op, _normalize_length(l), _normalize_length(r))
+        case c0.UnOp(op, arg):
+            return c0.UnOp(op, _normalize_length(arg))
+        case c0.ArrayAccess(arr, idx):
+            return c0.ArrayAccess(_normalize_length(arr), _normalize_length(idx))
+        case c0.ArrSet(arr, idx, val):
+            return c0.ArrSet(
+                _normalize_length(arr), _normalize_length(idx), _normalize_length(val)
+            )
+        case c0.ArrMake(length):
+            return c0.ArrMake(_normalize_length(length))
+        case c0.ForAll(vs, body):
+            return c0.ForAll(vs, _normalize_length(body))
+        case _:
+            return e
+
+
 # Module-level type environment
-# ---------------------------------------------------------------------------
 
 _var_types: Dict[str, c0.Type] = {}
 
@@ -122,25 +124,10 @@ def _register_types(extra: Dict[str, c0.Type]) -> None:
     _var_types.update(extra)
     solver.set_var_types(_var_types)
 
-
-# ---------------------------------------------------------------------------
-# WLP  — returns (formula, white_box_obligations)
-#
-# white_box_obligations is a list of formulas that must each be checked
-# independently for validity (they correspond to □P in the lecture notes).
-# ---------------------------------------------------------------------------
-
-WhiteBox = List[c0.Exp]  # type alias
+WhiteBox = List[c0.Exp] 
 
 
 def wlp(stmt: c0.Stmt, Q: c0.Exp, depth: int = 0) -> Tuple[c0.Exp, WhiteBox]:
-    """
-    Return (wlp(stmt, Q), white_box_obligations).
-
-    The white-box obligations are formulas that must be valid in every state
-    (the □ formulas from the while rule). They are checked separately in
-    check_safety, not folded into the main implication.
-    """
     match stmt:
 
         case c0.Block(stmts):
@@ -161,19 +148,24 @@ def wlp(stmt: c0.Stmt, Q: c0.Exp, depth: int = 0) -> Tuple[c0.Exp, WhiteBox]:
             return _and(guard, result), []
 
         case c0.AllocArray(dest, typ, count):
-            safe = _le(_int(0), count)
-            Q2   = c0_util.subst_exp(Q, dest, c0.ArrMake(count))
+            guard = divmod_guard(count)
+            safe  = _and(guard, _le(_int(0), count))
+            Q2    = c0_util.subst_exp(Q, dest, c0.ArrMake(count))
             return _and(safe, Q2), []
 
         case c0.ArrRead(dest, arr, idx):
-            safe = _and(_le(_int(0), idx), _lt(idx, _len(arr)))
-            Q2   = c0_util.subst_exp(Q, dest, c0.ArrayAccess(arr, idx))
+            guard = divmod_guard(idx)
+            safe  = _and(guard, _and(_le(_int(0), idx), _lt(idx, _len(arr))))
+            Q2    = c0_util.subst_exp(Q, dest, c0.ArrayAccess(arr, idx))
             return _and(safe, Q2), []
 
         case c0.ArrWrite(arr, idx, val):
-            safe = _and(_le(_int(0), idx), _lt(idx, _len(arr)))
+            guard = _and(divmod_guard(idx), divmod_guard(val))
+            safe  = _and(guard, _and(_le(_int(0), idx), _lt(idx, _len(arr))))
             if isinstance(arr, c0.Var):
-                Q2 = c0_util.subst_exp(Q, arr.name, c0.ArrSet(arr, idx, val))
+                new_arr = c0.ArrSet(arr, idx, val)
+                Q2 = c0_util.subst_exp(Q, arr.name, new_arr)
+                Q2 = _normalize_length(Q2)
             else:
                 Q2 = Q
             return _and(safe, Q2), []
@@ -182,14 +174,17 @@ def wlp(stmt: c0.Stmt, Q: c0.Exp, depth: int = 0) -> Tuple[c0.Exp, WhiteBox]:
             Q_true,  wb_true  = wlp(true_branch, Q, depth + 1)
             Q_false, wb_false = (wlp(false_branch, Q, depth + 1)
                                  if false_branch is not None else (Q, []))
-            result = _and(_implies(cond, Q_true), _implies(_not(cond), Q_false))
+            result = _and(
+                divmod_guard(cond),
+                _and(_implies(cond, Q_true), _implies(_not(cond), Q_false)),
+            )
             return result, wb_true + wb_false
 
         case c0.While(cond, invs, body):
             return wlp_while(cond, invs, body, Q, depth)
 
         case c0.Assert(cond):
-            return _and(cond, Q), []
+            return _and(divmod_guard(cond), _and(cond, Q)), []
 
         case c0.Error(_):
             # error() is always safe — continuation is irrelevant.
@@ -203,7 +198,6 @@ def wlp(stmt: c0.Stmt, Q: c0.Exp, depth: int = 0) -> Tuple[c0.Exp, WhiteBox]:
 
 
 def wlp_seq(stmts: List[c0.Stmt], Q: c0.Exp, depth: int = 0) -> Tuple[c0.Exp, WhiteBox]:
-    """WLP of a statement sequence — fold right, accumulating white-box obligations."""
     result = Q
     all_wb: WhiteBox = []
     for stmt in reversed(stmts):
@@ -219,17 +213,7 @@ def wlp_while(
     Q: c0.Exp,
     depth: int = 0,
 ) -> Tuple[c0.Exp, WhiteBox]:
-    """
-    WLP of a while loop with invariants, following Lecture 7 Section 6 & 8.
 
-    wlp(while^J cond body) Q =
-        J                              ← establishment (inline, uses concrete pre-loop values)
-      ∧ □(J ∧ cond  → wlp body J)    ← preservation  (white-box: checked standalone)
-      ∧ □(J ∧ ¬cond → Q)             ← exit           (white-box: checked standalone)
-
-    The □ formulas are returned as white-box obligations and checked
-    independently for validity (with no surrounding context/precondition).
-    """
     if not invs:
         # No invariant supplied — cannot verify. Conservatively unsafe.
         return _false(), []
@@ -239,93 +223,89 @@ def wlp_while(
     for i in invs[1:]:
         inv = _and(inv, i)
 
-    # ------------------------------------------------------------------
-    # Build the preservation white-box:  □(J ∧ cond → wlp(body, J))
-    #
-    # wlp(body, J) uses fresh symbolic variables for every scalar variable
-    # modified by the body, so the white-box is checked universally over
-    # all states satisfying J — not just the concrete pre-loop state.
-    #
-    # Array-typed modified vars are NOT given fresh names because
-    # solver.py's ForAll encoder only handles BitVec-sorted variables.
-    # Instead they remain as free uninterpreted constants whose lengths
-    # are constrained by the invariant (e.g. \length(arr) == argc).
-    # ------------------------------------------------------------------
-    modified = c0_util.get_defs(body)
 
-    avoid = (
+    body_wlp, inner_wb = wlp(body, inv, depth + 1)
+    modified = c0_util.get_defs(body)
+    scalar_modified = {
+        v for v in modified
+        if v in _var_types and not isinstance(_var_types[v], c0.ArrayType)
+    }
+    all_vars = (
         c0_util.vars_exp(inv)
         | c0_util.vars_exp(cond)
-        | c0_util.vars_stmt(body)
+        | c0_util.vars_exp(body_wlp)
         | c0_util.vars_exp(Q)
     )
+    avoid = all_vars | c0_util.vars_stmt(body)
+    scalar_vars = scalar_modified
     fresh_map: Dict[str, str] = {}
-    for var in sorted(modified):
+    for var in sorted(scalar_vars):
         fresh = c0_util.get_fresh_name(var + "_s", avoid)
         avoid.add(fresh)
         fresh_map[var] = fresh
 
-    # Register fresh var types so the solver encodes them correctly.
+    # Register fresh var types so the solver encodes them correctly
     fresh_types: Dict[str, c0.Type] = {}
     for orig, fresh in fresh_map.items():
         if orig in _var_types:
             fresh_types[fresh] = _var_types[orig]
     _register_types(fresh_types)
 
-    # Substitute scalar modified vars → fresh in inv and cond.
-    inv_sym  = inv
+    # Substitute all vars to fresh states
+    inv_sym = inv
     cond_sym = cond
-    for orig, fresh in fresh_map.items():
-        inv_sym  = c0_util.subst_exp(inv_sym,  orig, c0.Var(fresh))
-        cond_sym = c0_util.subst_exp(cond_sym, orig, c0.Var(fresh))
-
-    # Compute wlp(body, inv_sym).
-    # The body writes to original var names; backwards substitution replaces
-    # them with expressions over fresh vars. Also collect any nested
-    # white-box obligations from inside the body.
-    body_wlp, inner_wb = wlp(body, inv, depth + 1)
-
-    # Substitute any remaining original modified vars → fresh in body_wlp and Q.
     body_wlp_sym = body_wlp
     Q_sym = Q
     for orig, fresh in fresh_map.items():
+        inv_sym = c0_util.subst_exp(inv_sym, orig, c0.Var(fresh))
+        cond_sym = c0_util.subst_exp(cond_sym, orig, c0.Var(fresh))
         body_wlp_sym = c0_util.subst_exp(body_wlp_sym, orig, c0.Var(fresh))
-        Q_sym        = c0_util.subst_exp(Q_sym,        orig, c0.Var(fresh))
+        Q_sym = c0_util.subst_exp(Q_sym, orig, c0.Var(fresh))
+    inv_sym = _normalize_length(inv_sym)
+    body_wlp_sym = _normalize_length(body_wlp_sym)
+    Q_sym = _normalize_length(Q_sym)
 
-    # Build the inner formulas for the two white-box obligations.
-    preservation_inner = _implies(_and(inv_sym, cond_sym),       body_wlp_sym)
-    exit_inner         = _implies(_and(inv_sym, _not(cond_sym)), Q_sym)
+    cond_guard = divmod_guard(cond_sym)
+    preservation_inner = _implies(
+        _and(inv_sym, _and(cond_sym, cond_guard)), body_wlp_sym
+    )
+    exit_inner = _implies(
+        _and(inv_sym, _and(_not(cond_sym), cond_guard)), Q_sym
+    )
 
-    # Universally quantify over fresh scalar vars (the □ modality).
     fresh_vars = list(fresh_map.values())
     if fresh_vars:
-        preservation   = c0.ForAll(fresh_vars, preservation_inner)
+        preservation = c0.ForAll(fresh_vars, preservation_inner)
         exit_condition = c0.ForAll(fresh_vars, exit_inner)
     else:
-        preservation   = preservation_inner
+        preservation = preservation_inner
         exit_condition = exit_inner
 
-    # Per Section 8: the white-box formulas are pulled out and checked
-    # separately. The inline result is just the establishment J.
-    white_box_obligations = inner_wb + [preservation, exit_condition]
+    substituted_inner_wb = []
+    for wb_formula in inner_wb:
+        wb_sym = wb_formula
+        for orig, fresh in fresh_map.items():
+            wb_sym = c0_util.subst_exp(wb_sym, orig, c0.Var(fresh))
+        substituted_inner_wb.append(_normalize_length(wb_sym))
 
-    return inv, white_box_obligations
+    wrapped_inner_wb = []
+    for wb_formula in substituted_inner_wb:
+        if fresh_vars:
+            guarded = _implies(inv_sym, wb_formula)
+            wrapped_inner_wb.append(c0.ForAll(fresh_vars, guarded))
+        else:
+            wrapped_inner_wb.append(wb_formula)
+
+    white_box_obligations = wrapped_inner_wb + [preservation, exit_condition]
+    establishment = _and(divmod_guard(cond), inv)
+
+    return establishment, white_box_obligations
 
 
-# ---------------------------------------------------------------------------
 # Top-level
-# ---------------------------------------------------------------------------
 
 def check_safety(prog: c0.Program) -> bool:
-    """
-    Check memory safety via WLP + white-box obligations.
-
-    Per Lecture 7 Section 8:
-      - Compute (formula, white_boxes) = wlp(body, post)
-      - Check each white_box is independently valid (no precondition context)
-      - Check valid(pre → formula) for the main VC
-    All must pass for the program to be safe.
-    """
+    """Check memory safety w/ WLP and white-box obligations."""
     global _var_types
     c0_util.clear_subst_caches()
     prog = c0_util.rename_program(prog)
@@ -354,29 +334,25 @@ def check_safety(prog: c0.Program) -> bool:
 
     formula, white_boxes = wlp_seq(body_stmts, post_subst)
 
-    import sys
-    print(f"[WLP DEBUG] {len(white_boxes)} white-box obligations", file=sys.stderr)
-    
-    # Check all white-box obligations first (standalone, no precondition).
-    # These correspond to □P formulas from the while rule — they must be
-    # valid in every state, so we check them with no surrounding context.
-    for idx, wb in enumerate(white_boxes):
-        wb_simplified = c0_util.simplify(wb)
+    pre_simplified = c0_util.simplify(pre)
+
+    for wb in white_boxes:
+        wb_s = c0_util.simplify(_normalize_length(wb))
         try:
-            wb_valid = solver.check_validity(wb_simplified)
-            if not wb_valid:
+            if not solver.check_validity(wb_s):
                 return False
         except Exception as exc:
             raise RuntimeError(
                 f"[check_safety] Z3 ENCODING ERROR on white-box\n"
-                f"  WB   : {c0_util.stringify(wb_simplified, pretty=True)}\n"
+                f"  WB   : {c0_util.stringify(wb_s, pretty=True)}\n"
                 f"  Error: {exc}"
             ) from exc
 
-    # Check the main VC: pre → wlp(body, post).
-    vc = _implies(c0_util.simplify(pre), c0_util.simplify(formula))
+    vc = _implies(pre_simplified, c0_util.simplify(_normalize_length(formula)))
     try:
-        return solver.check_validity(vc)
+        if not solver.check_validity(vc):
+            return False
+        return True
     except Exception as exc:
         raise RuntimeError(
             f"[check_safety] Z3 ENCODING ERROR on main VC\n"
