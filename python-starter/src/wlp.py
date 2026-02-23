@@ -59,11 +59,31 @@ def _neq(a: c0.Exp, b: c0.Exp) -> c0.Exp:
 # Division/modulo safety guard
 # ---------------------------------------------------------------------------
 
-def _div_guard(src: c0.Exp) -> c0.Exp:
-    """Return denominator != 0 guard if src is a division/modulo, else True."""
-    if isinstance(src, c0.BinOp) and src.op in ("/", "%"):
-        return _neq(src.right, _int(0))
-    return _true()
+def divmod_guard(e: c0.Exp) -> c0.Exp:
+    """Conjoin denominator != 0 for every / and % in e (and in all subexpressions)."""
+    match e:
+        case c0.BinOp(op, left, right):
+            g = _and(divmod_guard(left), divmod_guard(right))
+            if op in ("/", "%"):
+                g = _and(g, _neq(right, _int(0)))
+            return g
+        case c0.UnOp(_, arg):
+            return divmod_guard(arg)
+        case c0.ArrayAccess(arr, index):
+            return _and(divmod_guard(arr), divmod_guard(index))
+        case c0.Length(arg):
+            return divmod_guard(arg)
+        case c0.ArrMake(length):
+            return divmod_guard(length)
+        case c0.ArrSet(arr, index, val):
+            return _and(
+                _and(divmod_guard(arr), divmod_guard(index)),
+                divmod_guard(val),
+            )
+        case c0.ForAll(_, body):
+            return divmod_guard(body)
+        case _:
+            return _true()
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +147,7 @@ def wlp(stmt: c0.Stmt, Q: c0.Exp, depth: int = 0) -> Tuple[c0.Exp, WhiteBox]:
             return wlp_seq(stmts, Q, depth + 1)
 
         case c0.Decl(typ, name, init):
-            guard = _div_guard(init) if init is not None else _true()
+            guard = divmod_guard(init) if init is not None else _true()
             default: c0.Exp = (
                 (c0.ArrMake(_int(0)) if isinstance(typ, c0.ArrayType) else _int(0))
                 if init is None else init
@@ -136,7 +156,7 @@ def wlp(stmt: c0.Stmt, Q: c0.Exp, depth: int = 0) -> Tuple[c0.Exp, WhiteBox]:
             return _and(guard, result), []
 
         case c0.Assign(dest, src):
-            guard = _div_guard(src)
+            guard = divmod_guard(src)
             result = c0_util.subst_exp(Q, dest, src)
             return _and(guard, result), []
 
@@ -231,10 +251,7 @@ def wlp_while(
     # Instead they remain as free uninterpreted constants whose lengths
     # are constrained by the invariant (e.g. \length(arr) == argc).
     # ------------------------------------------------------------------
-    scalar_modified = {
-        v for v in c0_util.get_defs(body)
-        if not isinstance(_var_types.get(v), c0.ArrayType)
-    }
+    modified = c0_util.get_defs(body)
 
     avoid = (
         c0_util.vars_exp(inv)
@@ -243,7 +260,7 @@ def wlp_while(
         | c0_util.vars_exp(Q)
     )
     fresh_map: Dict[str, str] = {}
-    for var in sorted(scalar_modified):
+    for var in sorted(modified):
         fresh = c0_util.get_fresh_name(var + "_s", avoid)
         avoid.add(fresh)
         fresh_map[var] = fresh
@@ -266,10 +283,9 @@ def wlp_while(
     # The body writes to original var names; backwards substitution replaces
     # them with expressions over fresh vars. Also collect any nested
     # white-box obligations from inside the body.
-    body_wlp, inner_wb = wlp(body, inv_sym, depth + 1)
+    body_wlp, inner_wb = wlp(body, inv, depth + 1)
 
-    # Substitute any remaining original modified vars → fresh in body_wlp
-    # and Q (for the exit condition).
+    # Substitute any remaining original modified vars → fresh in body_wlp and Q.
     body_wlp_sym = body_wlp
     Q_sym = Q
     for orig, fresh in fresh_map.items():
@@ -340,15 +356,14 @@ def check_safety(prog: c0.Program) -> bool:
 
     import sys
     print(f"[WLP DEBUG] {len(white_boxes)} white-box obligations", file=sys.stderr)
-
+    
     # Check all white-box obligations first (standalone, no precondition).
     # These correspond to □P formulas from the while rule — they must be
     # valid in every state, so we check them with no surrounding context.
-    for wb in white_boxes:
+    for idx, wb in enumerate(white_boxes):
         wb_simplified = c0_util.simplify(wb)
         try:
             wb_valid = solver.check_validity(wb_simplified)
-            print(f"[WLP DEBUG] wb[{white_boxes.index(wb)}] valid={wb_valid}: {c0_util.stringify(wb_simplified)[:120]}", file=sys.stderr)
             if not wb_valid:
                 return False
         except Exception as exc:
