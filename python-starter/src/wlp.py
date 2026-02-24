@@ -199,7 +199,7 @@ def update_old_var(e, orig_to_new):
 #                           AND whitebox(J and (not)P -> Q)
 def wlp_while(cond, invs, body, Q, depth, env=None):
     if not invs:
-        return c0.BoolConst(), []
+        return c0.BoolConst(False), []
 
     #join invariants -> formula first
     inv = invs[0]
