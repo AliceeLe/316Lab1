@@ -1,357 +1,323 @@
-from __future__ import annotations
+"""WLP-based memory safety checker (students implement)."""
 
-from typing import List, Dict, Tuple
+from __future__ import annotations
 
 import c0
 import c0_util
 import solver
 
-# Expression helpers
-def _true() -> c0.Exp:  return c0.BoolConst(True)
-def _false() -> c0.Exp: return c0.BoolConst(False)
+#nts safety using wlp by proving p -> [alpha]Q holds
+#to do this: compute wlp alpha Q and check if P -> wlp alpha Q & the 
+#white box reqs
 
-def _and(a: c0.Exp, b: c0.Exp) -> c0.Exp:
-    if isinstance(a, c0.BoolConst) and a.value:      return b
-    if isinstance(b, c0.BoolConst) and b.value:      return a
-    if isinstance(a, c0.BoolConst) and not a.value:  return a
-    if isinstance(b, c0.BoolConst) and not b.value:  return b
+
+#ALL PRE LOGIC STUFF (ex; helpers & type checking to use solver.py helpers)
+#helpers for expression symbols
+
+def true_sym():  
+    return c0.BoolConst(True)
+def and_sym(a, b):
+    if (isinstance(a, c0.BoolConst) and a.value):     
+        return b
+    if (isinstance(b, c0.BoolConst) and b.value):     
+        return a
+    if (isinstance(a, c0.BoolConst) and not a.value): 
+        return a
+    if (isinstance(b, c0.BoolConst) and not b.value): 
+        return b
     return c0.BinOp("&&", a, b)
-
-def _implies(a: c0.Exp, b: c0.Exp) -> c0.Exp:
-    return c0.BinOp("=>", a, b)
-
-def _not(a: c0.Exp) -> c0.Exp:
+def not_sym(a):        
     return c0.UnOp("!", a)
-
-def _int(v: int) -> c0.Exp:
+def implies_sym(a, b): 
+    return c0.BinOp("=>", a, b)
+def leq(a, b):      
+    return c0.BinOp("<=", a, b)
+def int_sym(v):        
     return c0.IntConst(v)
 
-def _le(a: c0.Exp, b: c0.Exp) -> c0.Exp:
-    return c0.BinOp("<=", a, b)
-
-def _lt(a: c0.Exp, b: c0.Exp) -> c0.Exp:
-    return c0.BinOp("<", a, b)
-
-def _len(a: c0.Exp) -> c0.Exp:
-    return c0.Length(a)
-
-def _neq(a: c0.Exp, b: c0.Exp) -> c0.Exp:
-    return c0.BinOp("!=", a, b)
-
-
-# Division/mod safety guard
-def divmod_guard(e: c0.Exp) -> c0.Exp:
+#requires all denominator to be non zero
+def denominator_zero_check(e):
     match e:
-        case c0.BinOp(op, left, right):
-            g = _and(divmod_guard(left), divmod_guard(right))
-            if op in ("/", "%"):
-                g = _and(g, _neq(right, _int(0)))
-            return g
-        case c0.UnOp(_, arg):
-            return divmod_guard(arg)
-        case c0.ArrayAccess(arr, index):
-            return _and(divmod_guard(arr), divmod_guard(index))
-        case c0.Length(arg):
-            return divmod_guard(arg)
-        case c0.ArrMake(length):
-            return divmod_guard(length)
-        case c0.ArrSet(arr, index, val):
-            return _and(
-                _and(divmod_guard(arr), divmod_guard(index)),
-                divmod_guard(val),
-            )
-        case c0.ForAll(_, body):
-            return divmod_guard(body)
-        case _:
-            return _true()
-
-
-def _normalize_length(e: c0.Exp) -> c0.Exp:
-    match e:
-        case c0.Length(c0.ArrSet(arr, _, _)):
-            return _normalize_length(c0.Length(arr))
-        case c0.Length(arg):
-            return c0.Length(_normalize_length(arg))
+        #!= 0 for / and %
         case c0.BinOp(op, l, r):
-            return c0.BinOp(op, _normalize_length(l), _normalize_length(r))
-        case c0.UnOp(op, arg):
-            return c0.UnOp(op, _normalize_length(arg))
-        case c0.ArrayAccess(arr, idx):
-            return c0.ArrayAccess(_normalize_length(arr), _normalize_length(idx))
-        case c0.ArrSet(arr, idx, val):
-            return c0.ArrSet(
-                _normalize_length(arr), _normalize_length(idx), _normalize_length(val)
-            )
-        case c0.ArrMake(length):
-            return c0.ArrMake(_normalize_length(length))
-        case c0.ForAll(vs, body):
-            return c0.ForAll(vs, _normalize_length(body))
+            g = and_sym(denominator_zero_check(l), denominator_zero_check(r))
+            if op in ("/", "%"):
+                g = and_sym(g, c0.BinOp("!=", r, int_sym(0)))
+            return g
+            
+        #recursively check every denominator in argument
+        #to any of the following helper functions != 0 from 
+        # c0.py. Ensures everytime we call one of those helpers it's safe
+
+        case c0.UnOp(_, arg):           
+            return denominator_zero_check(arg)
+        case c0.ArrayAccess(arr, idx):  
+            return and_sym(denominator_zero_check(arr), denominator_zero_check(idx))
+        case c0.Length(arg):            
+            return denominator_zero_check(arg)
+        case c0.ArrMake(n):             
+            return denominator_zero_check(n)
+        case c0.ArrSet(arr, idx, val):  
+            return and_sym(denominator_zero_check(arr), and_sym(denominator_zero_check(idx), denominator_zero_check(val)))
+        case c0.ForAll(_, body):        
+            return denominator_zero_check(body)
+        #Base case ; everything's satisfied !!
+        case _:                         
+            return true_sym()
+
+
+#need to map variables to c0 types to be usable by 
+#solver.py when converting to z3 formulas. 
+#type info stored in ast so need to read from this 
+# by traversing the tree
+
+def traverse_ast_types(s, types):
+    match s:
+        case c0.Decl(typ, name, _):
+            types[name] = typ
+        case c0.AllocArray(dest, typ, _):
+            types[dest] = c0.ArrayType(typ)
+        case c0.ArrRead(dest, _, _):
+            types[dest] = c0.IntType()
+        case c0.Block(commandList):
+            for st in commandList:
+                traverse_ast_types(st, types)
+        case c0.If(_, t, f):
+            traverse_ast_types(t, types)
+            if f:
+                traverse_ast_types(f, types)
+        case c0.While(_, _, body):
+            traverse_ast_types(body, types)
         case _:
-            return e
+            pass
 
-
-# Module-level type environment
-
-_var_types: Dict[str, c0.Type] = {}
-
-
-def collect_types(prog: c0.Program) -> Dict[str, c0.Type]:
-    """Collect name->Type for every variable so solver encodes arrays correctly."""
-    types: Dict[str, c0.Type] = {}
-    arg_names = prog.args or []
-    for name, typ in zip(arg_names, [c0.IntType(), c0.ArrayType(c0.IntType())]):
-        types[name] = typ
-
-    def walk(s: c0.Stmt) -> None:
-        match s:
-            case c0.Decl(typ, name, _):       types[name] = typ
-            case c0.AllocArray(dest, typ, _):  types[dest] = c0.ArrayType(typ)
-            case c0.ArrRead(dest, _, _):       types[dest] = c0.IntType()
-            case c0.Block(stmts):
-                for st in stmts: walk(st)
-            case c0.If(_, t, f):
-                walk(t)
-                if f: walk(f)
-            case c0.While(_, _, body):
-                walk(body)
-
+def build_type_mapping(prog):
+    # main(int argc, int[] in) → first arg int, second int[]
+    arg_types = (c0.IntType(), c0.ArrayType(c0.IntType()))
+    map_types = dict(zip(prog.args or [], arg_types))
     for s in prog.stmts:
-        walk(s)
-    return types
+        traverse_ast_types(s, map_types)
+    return map_types
 
 
-def _register_types(extra: Dict[str, c0.Type]) -> None:
-    _var_types.update(extra)
-    solver.set_var_types(_var_types)
 
-WhiteBox = List[c0.Exp] 
+#ACTUAL WLP LOGIC
+
+def check_in_bounds(arr, i):
+    #checks 0 <= i && i < length(arr)
+    return and_sym(leq(int_sym(0), i), c0.BinOp("<", i, c0.Length(arr)))
+
+#remember the white boxes r requirements that need to be satisfied in every state
+def check_pre_postcondition(precondition, post, white_boxes=None):
+    
+    if white_boxes is not None:
+        return and_sym(precondition, post), white_boxes
+    else:
+        return and_sym(precondition, post), []
+
+#wlp(alpha; beta)(Q) = wlp(alpha)(wlp(beta)(Q))
+#need to eval right to left
+def wlp_sequence(commandList, Q, depth, env):
+    result, all_whiteboxes = Q, []
+    for command in reversed(commandList):
+        result, wb = wlp(command, result, depth, env)
+        all_whiteboxes = wb + all_whiteboxes
+    return result, all_whiteboxes
 
 
-def wlp(stmt: c0.Stmt, Q: c0.Exp, depth: int = 0) -> Tuple[c0.Exp, WhiteBox]:
-    match stmt:
-
-        case c0.Block(stmts):
-            return wlp_seq(stmts, Q, depth + 1)
-
-        case c0.Decl(typ, name, init):
-            guard = divmod_guard(init) if init is not None else _true()
-            default: c0.Exp = (
-                (c0.ArrMake(_int(0)) if isinstance(typ, c0.ArrayType) else _int(0))
-                if init is None else init
-            )
-            result = c0_util.subst_exp(Q, name, default)
-            return _and(guard, result), []
+#prove P -> [alpha]Q for all commands in c0
+def wlp(command, Q, depth=0, env=None):
+    match command:
+        case c0.Block(commandList):
+            return wlp_sequence(commandList, Q, depth + 1, env)
 
         case c0.Assign(dest, src):
-            guard = divmod_guard(src)
-            result = c0_util.subst_exp(Q, dest, src)
-            return _and(guard, result), []
-
-        case c0.AllocArray(dest, typ, count):
-            guard = divmod_guard(count)
-            safe  = _and(guard, _le(_int(0), count))
-            Q2    = c0_util.subst_exp(Q, dest, c0.ArrMake(count))
-            return _and(safe, Q2), []
-
-        case c0.ArrRead(dest, arr, idx):
-            guard = divmod_guard(idx)
-            safe  = _and(guard, _and(_le(_int(0), idx), _lt(idx, _len(arr))))
-            Q2    = c0_util.subst_exp(Q, dest, c0.ArrayAccess(arr, idx))
-            return _and(safe, Q2), []
-
-        case c0.ArrWrite(arr, idx, val):
-            guard = _and(divmod_guard(idx), divmod_guard(val))
-            safe  = _and(guard, _and(_le(_int(0), idx), _lt(idx, _len(arr))))
-            if isinstance(arr, c0.Var):
-                new_arr = c0.ArrSet(arr, idx, val)
-                Q2 = c0_util.subst_exp(Q, arr.name, new_arr)
-                Q2 = _normalize_length(Q2)
+            return check_pre_postcondition(denominator_zero_check(src), c0_util.subst_exp(Q, dest, src))
+        
+        case c0.Decl(type, name, init):
+            if init is not None:
+                precondition = denominator_zero_check(init)
+                x = init
             else:
-                Q2 = Q
-            return _and(safe, Q2), []
+                precondition = true_sym()
+                if isinstance(type, c0.ArrayType):
+                    x = c0.ArrMake(int_sym(0))
+                else:
+                    x = int_sym(0)
+            return check_pre_postcondition(precondition, c0_util.subst_exp(Q, name, x))
+        
+        case c0.AllocArray(dest, type, count):
+            precondition = and_sym(denominator_zero_check(count), leq(int_sym(0), count))
+            return check_pre_postcondition(precondition, c0_util.subst_exp(Q, dest, c0.ArrMake(count)))
+
+        case c0.ArrRead(dest, arr, i):
+            precondition = and_sym(denominator_zero_check(i), check_in_bounds(arr, i))
+            post = c0_util.subst_exp(Q, dest, c0.ArrayAccess(arr, i))
+            return check_pre_postcondition(precondition, post)
+
+        case c0.ArrWrite(arr, i, x):
+            precondition = and_sym(denominator_zero_check(i), and_sym(denominator_zero_check(x), check_in_bounds(arr, i)))
+            if isinstance(arr, c0.Var):
+                post = c0_util.subst_exp(Q, arr.name, c0.ArrSet(arr, i, x))
+            else:
+                post = Q
+            return check_pre_postcondition(precondition, post)
 
         case c0.If(cond, true_branch, false_branch):
-            Q_true,  wb_true  = wlp(true_branch, Q, depth + 1)
-            Q_false, wb_false = (wlp(false_branch, Q, depth + 1)
-                                 if false_branch is not None else (Q, []))
-            result = _and(
-                divmod_guard(cond),
-                _and(_implies(cond, Q_true), _implies(_not(cond), Q_false)),
-            )
-            return result, wb_true + wb_false
+            Q_true, whitebox_true = wlp(true_branch, Q, depth + 1, env)
+            if false_branch:
+                Q_false, whitebox_f = wlp(false_branch, Q, depth + 1, env)
+            else:
+                Q_false, whitebox_f = Q, []
+            precondition = denominator_zero_check(cond)
+            branch = and_sym(implies_sym(cond, Q_true), implies_sym(not_sym(cond), Q_false))
+            return and_sym(precondition, branch), whitebox_true + whitebox_f
 
-        case c0.While(cond, invs, body):
-            return wlp_while(cond, invs, body, Q, depth)
+        case c0.While(cond, invariants, body):
+            return wlp_while(cond, invariants, body, Q, depth, env)
 
         case c0.Assert(cond):
-            return _and(divmod_guard(cond), _and(cond, Q)), []
+            return check_pre_postcondition(and_sym(denominator_zero_check(cond), cond), Q)
 
-        case c0.Error(_):
-            # error() is always safe so we can just terminate rn
-            return _true(), []
+        case c0.Error(msg):
+            return true_sym(), []
 
-        case c0.Return(_):
+        case c0.Return(val):
             return Q, []
 
         case _:
             return Q, []
 
+def update_old_var(e, orig_to_new):
+    #replace every variable in orig_to_new w/ new name in e
+    out = e
+    for orig, new in orig_to_new.items():
+        out = c0_util.subst_exp(out, orig, c0.Var(new))
+    return out
 
-def wlp_seq(stmts: List[c0.Stmt], Q: c0.Exp, depth: int = 0) -> Tuple[c0.Exp, WhiteBox]:
-    result = Q
-    all_wb: WhiteBox = []
-    for stmt in reversed(stmts):
-        result, wb = wlp(stmt, result, depth)
-        all_wb = wb + all_wb
-    return result, all_wb
-
-
-def wlp_while(
-    cond: c0.Exp,
-    invs: List[c0.Exp],
-    body: c0.Stmt,
-    Q: c0.Exp,
-    depth: int = 0,
-) -> Tuple[c0.Exp, WhiteBox]:
-
+#wlp(while^J P alpha) Q = J AND whitebox(J and P -> wlp alpha J) 
+#                           AND whitebox(J and (not)P -> Q)
+def wlp_while(cond, invs, body, Q, depth, env=None):
     if not invs:
-        #there's no invariant to check so unsafe
-        return _false(), []
+        return c0.BoolConst(), []
 
-    
-    inv: c0.Exp = invs[0]
+    #join invariants -> formula first
+    inv = invs[0]
     for i in invs[1:]:
-        inv = _and(inv, i)
+        inv = and_sym(inv, i)
 
+    #compute wlp(body, inv) to get the body's weakest precondition
+    body_wlp, nested_whitebx = wlp(body, inv, depth + 1, env)
 
-    body_wlp, inner_wb = wlp(body, inv, depth + 1)
-    modified = c0_util.get_defs(body)
-    avoid = (
-        c0_util.vars_exp(inv)
-        | c0_util.vars_exp(cond)
-        | c0_util.vars_stmt(body)
-        | c0_util.vars_exp(Q)
-    )
-    fresh_map: Dict[str, str] = {}
-    for var in sorted(modified):
-        fresh = c0_util.get_fresh_name(var + "_s", avoid)
-        avoid.add(fresh)
-        fresh_map[var] = fresh
+    modified_variables = set()
+    variables = c0_util.get_defs(body)
+    for v in variables:
+        if env is None:
+            continue
+        if v not in env:
+            continue
+        if isinstance(env[v], c0.ArrayType):
+            continue
+        modified_variables.add(v)
 
-    fresh_types: Dict[str, c0.Type] = {}
-    for orig, fresh in fresh_map.items():
-        if orig in _var_types:
-            fresh_types[fresh] = _var_types[orig]
-    _register_types(fresh_types)
+    #set of variable names already used, so avoid 
+    used_name = set()
+    used_name.update(c0_util.vars_exp(inv))
+    used_name.update(c0_util.vars_exp(cond))
+    used_name.update(c0_util.vars_exp(body_wlp))
+    used_name.update(c0_util.vars_exp(Q))
+    used_name.update(c0_util.vars_stmt(body))
 
-    inv_sym = inv
-    cond_sym = cond
-    body_wlp_sym = body_wlp
-    Q_sym = Q
-    for orig, fresh in fresh_map.items():
-        inv_sym = c0_util.subst_exp(inv_sym, orig, c0.Var(fresh))
-        cond_sym = c0_util.subst_exp(cond_sym, orig, c0.Var(fresh))
-        body_wlp_sym = c0_util.subst_exp(body_wlp_sym, orig, c0.Var(fresh))
-        Q_sym = c0_util.subst_exp(Q_sym, orig, c0.Var(fresh))
-    inv_sym = _normalize_length(inv_sym)
-    body_wlp_sym = _normalize_length(body_wlp_sym)
-    Q_sym = _normalize_length(Q_sym)
+    #assign a new name to each modified vairables
+    og_to_new = {}
+    for var in sorted(modified_variables):
+        fresh = c0_util.get_fresh_name(var + "_s", used_name)
+        used_name.add(fresh)
+        og_to_new[var] = fresh
 
-    cond_guard = divmod_guard(cond_sym)
-    preservation_inner = _implies(
-        _and(inv_sym, _and(cond_sym, cond_guard)), body_wlp_sym
-    )
-    exit_inner = _implies(
-        _and(inv_sym, _and(_not(cond_sym), cond_guard)), Q_sym
-    )
+    # give new names correct c0 types
+    if env is not None:
+        extra_types = {}
+        for orig, fresh in og_to_new.items():
+            if orig in env:
+                extra_types[fresh] = env[orig]
+        env.update(extra_types)
+        solver.set_var_types(env)
 
-    # Only quantify over scalar fresh vars (Z3 ForAll handles BitVec, not array sorts)
-    fresh_vars = [
-        fresh for orig, fresh in fresh_map.items()
-        if orig in _var_types and not isinstance(_var_types[orig], c0.ArrayType)
-    ]
-    if fresh_vars:
-        preservation = c0.ForAll(fresh_vars, preservation_inner)
-        exit_condition = c0.ForAll(fresh_vars, exit_inner)
-    else:
-        preservation = preservation_inner
-        exit_condition = exit_inner
+    inv_sym = update_old_var(inv, og_to_new)
+    cond_sym = update_old_var(cond, og_to_new)
+    body_wlp_sym = update_old_var(body_wlp, og_to_new)
+    Q_sym = update_old_var(Q, og_to_new)
 
-    substituted_inner_wb = []
-    for wb_formula in inner_wb:
-        wb_sym = wb_formula
-        for orig, fresh in fresh_map.items():
-            wb_sym = c0_util.subst_exp(wb_sym, orig, c0.Var(fresh))
-        substituted_inner_wb.append(_normalize_length(wb_sym))
+    # loop preservation check
+    cond_precondition = denominator_zero_check(cond_sym)
+    preservation_antecedent = and_sym(inv_sym, and_sym(cond_sym, cond_precondition))
+    preservation = implies_sym(preservation_antecedent, body_wlp_sym)
 
-    wrapped_inner_wb = []
-    for wb_formula in substituted_inner_wb:
-        if fresh_vars:
-            guarded = _implies(inv_sym, wb_formula)
-            wrapped_inner_wb.append(c0.ForAll(fresh_vars, guarded))
+    # exit loop check
+    exit_antecedent = and_sym(inv_sym, and_sym(not_sym(cond_sym), cond_precondition))
+    exit_cond = implies_sym(exit_antecedent, Q_sym)
+
+    new_variables = list(og_to_new.values())
+    if new_variables:
+        preservation = c0.ForAll(new_variables, preservation)
+        exit_cond = c0.ForAll(new_variables, exit_cond)
+
+    # checks from nested loops
+    nested_loop_checks = []
+    for whitebox in nested_whitebx:
+        new_whitebox = update_old_var(whitebox, og_to_new)
+        if new_variables:
+            nested_loop_checks.append(c0.ForAll(new_variables, implies_sym(inv_sym, new_whitebox)))
         else:
-            wrapped_inner_wb.append(wb_formula)
+            nested_loop_checks.append(new_whitebox)
 
-    white_box_obligations = wrapped_inner_wb + [preservation, exit_condition]
-    establishment = _and(divmod_guard(cond), inv)
+    init_check = and_sym(denominator_zero_check(cond), inv)
+    verify_all = nested_loop_checks + [preservation, exit_cond]
+    return init_check, verify_all
 
-    return establishment, white_box_obligations
 
 
-# Top-level
-
-def check_safety(prog: c0.Program) -> bool:
-    """Check memory safety w/ WLP and white-box obligations."""
-    global _var_types
+def check_safety(
+    prog: c0.Program,
+) -> bool:
     c0_util.clear_subst_caches()
     prog = c0_util.rename_program(prog)
 
-    _var_types = collect_types(prog)
-    solver.set_var_types(_var_types)
+    env = build_type_mapping(prog)
+    solver.set_var_types(env)
 
-    pre: c0.Exp = _true()
-    for req in (prog.requires or []):
-        pre = _and(pre, req)
+    pre = true_sym()
+    for require in (prog.requires or []):
+        pre = and_sym(pre, require)
 
-    post: c0.Exp = _true()
-    for ens in (prog.ensures or []):
-        post = _and(post, ens)
+    post = true_sym()
+    for ensure in (prog.ensures or []):
+        post = and_sym(post, ensure)
 
-    stmts = prog.stmts
-    if stmts and isinstance(stmts[-1], c0.Return):
-        return_val = stmts[-1].val
-        body_stmts = stmts[:-1]
+    # need to split to run wlp on the body and substitute the 
+    # return into postcondition
+    commandList = prog.stmts
+    if commandList:
+        last_command = commandList[-1]
+    else:
+        last_command = None
+    if isinstance(last_command, c0.Return):
+        return_val = last_command.val
+        body_commands = commandList[:-1]
     else:
         return_val = None
-        body_stmts = stmts
+        body_commands = commandList
 
-    post_subst = (c0_util.subst_result(post, return_val)
-                  if return_val is not None else post)
-
-    formula, white_boxes = wlp_seq(body_stmts, post_subst)
-
-    pre_simplified = c0_util.simplify(pre)
+    if return_val is not None:
+        post_subst = c0_util.subst_result(post, return_val)
+    else:
+        post_subst = post
+    formula, white_boxes = wlp_sequence(body_commands, post_subst, 0, env)
 
     for wb in white_boxes:
-        wb_s = c0_util.simplify(_normalize_length(wb))
-        try:
-            if not solver.check_validity(wb_s):
-                return False
-        except Exception as exc:
-            raise RuntimeError(
-                f"[check_safety] Z3 ENCODING ERROR on white-box\n"
-                f"  WB   : {c0_util.stringify(wb_s, pretty=True)}\n"
-                f"  Error: {exc}"
-            ) from exc
-
-    vc = _implies(pre_simplified, c0_util.simplify(_normalize_length(formula)))
-    try:
-        if not solver.check_validity(vc):
+        if not solver.check_validity(wb):
             return False
-        return True
-    except Exception as exc:
-        raise RuntimeError(
-            f"[check_safety] Z3 ENCODING ERROR on main VC\n"
-            f"  VC   : {c0_util.stringify(vc, pretty=True)}\n"
-            f"  Error: {exc}"
-        ) from exc
+
+    vc = implies_sym(pre, formula)
+    return solver.check_validity(vc)
