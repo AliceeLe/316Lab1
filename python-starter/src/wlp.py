@@ -290,6 +290,11 @@ def check_safety(
     pre = true_sym()
     for require in (prog.requires or []):
         pre = and_sym(pre, require)
+    
+    if prog.args and len(prog.args) == 2:
+        argc_name, in_name = prog.args[0], prog.args[1]
+        pre = and_sym(pre, leq(int_sym(0), c0.Var(argc_name)))
+        pre = and_sym(pre, c0.BinOp("==", c0.Length(c0.Var(in_name)), c0.Var(argc_name)))
 
     post = true_sym()
     for ensure in (prog.ensures or []):
